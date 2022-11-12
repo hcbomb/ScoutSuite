@@ -26,6 +26,7 @@ class AWSFacadeUtils:
 
         results = await AWSFacadeUtils.get_multiple_entities_from_all_pages(
             service, region, session, paginator_name, [entity], **paginator_args)
+
         if len(results) > 0:
             return results[entity]
         else:
@@ -54,7 +55,7 @@ class AWSFacadeUtils:
 
         # Getting all pages from a paginator requires API calls so we need to do it concurrently:
         try:
-            return await run_concurrently(lambda: AWSFacadeUtils._get_all_pages_from_paginator(paginator, entities))
+            return await run_concurrently(lambda: AWSFacadeUtils._get_all_pages_from_paginator(service, paginator, entities))
         except ClientError as e:
             if e.response['Error']['Code'] in ['AccessDenied',
                                                'AccessDeniedException',
@@ -66,13 +67,22 @@ class AWSFacadeUtils:
                 raise
 
     @staticmethod
-    def _get_all_pages_from_paginator(paginator, entities: list):
+    def _get_all_pages_from_paginator(service, paginator, entities: list):
         resources = {entity: [] for entity in entities}
+
+        throttle_counter = 0
+        #ec2_throttle = (service == 'ec2')
 
         # There's an API call hidden behind each iteration:
         for page in paginator:
             for entity in entities:
+                throttle_counter += 1
                 resources[entity].extend(page[entity])
+
+                # AWS token refills at 20 per second, allow to recover. 12 based off of 20 and magic ratio
+                if throttle_counter % 12 == 0:
+                    print_debug(f'Hit {service} count threshold for proactive API limiting. Throttle counter:              {throttle_counter}')
+                    time.sleep(10)
 
         return resources
 
